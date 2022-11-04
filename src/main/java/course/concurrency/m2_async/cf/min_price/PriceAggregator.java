@@ -1,12 +1,15 @@
 package course.concurrency.m2_async.cf.min_price;
 
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.DoubleAccumulator;
 
 public class PriceAggregator {
+    private static final int SLA = 3000;
+    private static final int EXTRA = 100;
     private PriceRetriever priceRetriever = new PriceRetriever();
 
     public void setPriceRetriever(PriceRetriever priceRetriever) {
@@ -20,15 +23,16 @@ public class PriceAggregator {
     }
 
     public double getMinPrice(long itemId) {
-        return CompletableFuture.supplyAsync(() -> {
-            final var min = new DoubleAccumulator(Double::min, Double.MAX_VALUE);
-
-            shopIds.stream()
-                    .map(shopId -> CompletableFuture.supplyAsync(() -> priceRetriever.getPrice(itemId, shopId))
-                            .exceptionally(throwable -> Double.MAX_VALUE))
-                    .forEach(priceFuture -> min.accumulate(priceFuture.join()));
-
-            return min.get();
-        }).completeOnTimeout(Double.NaN, 2900, TimeUnit.MILLISECONDS).join();
+        return Arrays.stream(shopIds.stream()
+                        .map(shopId -> CompletableFuture.supplyAsync(() -> priceRetriever.getPrice(itemId, shopId)))
+                        .map(priceFuture -> priceFuture
+                                .orTimeout(SLA - EXTRA, TimeUnit.MILLISECONDS)
+                                .exceptionally(e -> null))
+                        .toArray(CompletableFuture[]::new))
+                .map(CompletableFuture::join)
+                .filter(Objects::nonNull)
+                .mapToDouble(price -> (Double) price)
+                .min()
+                .orElse(Double.NaN);
     }
 }
